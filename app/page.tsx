@@ -1,7 +1,8 @@
-"use client";
+'use client';
 
-import { useState, useEffect, useRef } from "react";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useState, useEffect } from 'react';
+import { io, Socket } from 'socket.io-client';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
 type ProductId = 'BTC-USD' | 'ETH-USD' | 'XRP-USD' | 'LTC-USD';
 
@@ -36,61 +37,55 @@ export default function Home() {
     'XRP-USD': null,
     'LTC-USD': null,
   });
-  const ws = useRef<WebSocket | null>(null);
+  const [socket, setSocket] = useState<Socket | null>(null);
+  const [connectionStatus, setConnectionStatus] = useState({
+    connected: false,
+    coinbaseConnected: false,
+  });
 
   useEffect(() => {
-    // Initialize WebSocket connection
-    ws.current = new WebSocket('wss://ws-feed.exchange.coinbase.com');
+    // Initialize Socket.IO connection to our relay server
+    const socketInstance = io('http://localhost:4000');
 
-    ws.current.onopen = () => {
-      console.log('WebSocket Connected');
-    };
+    socketInstance.on('connect', () => {
+      console.log('Connected to relay server');
+      setConnectionStatus(prev => ({ ...prev, connected: true }));
+    });
 
-    ws.current.onmessage = (event) => {
-      const data: TickerData = JSON.parse(event.data);
+    socketInstance.on('disconnect', () => {
+      console.log('Disconnected from relay server');
+      setConnectionStatus({ connected: false, coinbaseConnected: false });
+    });
+
+    socketInstance.on('coinbase-status', (status: { connected: boolean }) => {
+      setConnectionStatus(prev => ({ ...prev, coinbaseConnected: status.connected }));
+    });
+
+    socketInstance.on('ticker', (data: TickerData) => {
       if (data.type === 'ticker') {
         setTickerData(prev => ({
           ...prev,
           [data.product_id]: data
         }));
       }
-    };
+    });
 
-    ws.current.onerror = (error) => {
-      console.error('WebSocket error:', error);
-    };
+    setSocket(socketInstance);
 
     return () => {
-      ws.current?.close();
+      socketInstance.disconnect();
     };
   }, []);
 
   const subscribe = (productId: ProductId) => {
-    if (!ws.current) return;
-    
-    const message = {
-      type: 'subscribe',
-      product_ids: [productId],
-      channels: ['level2', 'matches',{
-        "name": "ticker",
-        "product_ids": [productId]
-      }]
-    };
-    
-    ws.current.send(JSON.stringify(message));
+    if (!socket) return;
+    socket.emit('subscribe', productId);
     setSubscribed(prev => new Set([...prev, productId]));
   };
 
   const unsubscribe = (productId: ProductId) => {
-    if (!ws.current) return;
-    
-    const message = {
-      type: 'unsubscribe',
-      product_ids: [productId],
-      channels: ['level2', 'matches']
-    };
-    
-    ws.current.send(JSON.stringify(message));
+    if (!socket) return;
+    socket.emit('unsubscribe', productId);
     setSubscribed(prev => {
       const newSet = new Set(prev);
       newSet.delete(productId);
@@ -115,7 +110,7 @@ export default function Home() {
           <TabsTrigger value="subscribe" onClick={() => setActiveTab('subscribe')}>
             Subscribe/Unsubscribe
           </TabsTrigger>
-          <TabsTrigger value="price"  onClick={() => setActiveTab('price')}>
+          <TabsTrigger value="price" onClick={() => setActiveTab('price')}>
             Price Tab
           </TabsTrigger>
           <TabsTrigger value="match" onClick={() => setActiveTab('match')}>
@@ -260,16 +255,31 @@ export default function Home() {
           <div className="p-4 border rounded-lg">
             <h2 className="text-xl font-semibold mb-4">System Status</h2>
             <div className="space-y-4">
-              <div className="p-4 bg-green-50 border border-green-200 rounded-md">
+              <div className={`p-4 ${connectionStatus.connected ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'} border rounded-md`}>
                 <div className="flex">
                   <div className="flex-shrink-0">
-                    <svg className="h-5 w-5 text-green-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                    <svg className={`h-5 w-5 ${connectionStatus.connected ? 'text-green-400' : 'text-red-400'}`} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
                       <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
                     </svg>
                   </div>
                   <div className="ml-3">
-                    <p className="text-sm font-medium text-green-800">
-                      WebSocket Connection: Connected
+                    <p className={`text-sm font-medium ${connectionStatus.connected ? 'text-green-800' : 'text-red-800'}`}>
+                      Relay Server: {connectionStatus.connected ? 'Connected' : 'Disconnected'}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className={`p-4 ${connectionStatus.coinbaseConnected ? 'bg-green-50 border-green-200' : 'bg-yellow-50 border-yellow-200'} border rounded-md`}>
+                <div className="flex">
+                  <div className="flex-shrink-0">
+                    <svg className={`h-5 w-5 ${connectionStatus.coinbaseConnected ? 'text-green-400' : 'text-yellow-400'}`} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                      <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                    </svg>
+                  </div>
+                  <div className="ml-3">
+                    <p className={`text-sm font-medium ${connectionStatus.coinbaseConnected ? 'text-green-800' : 'text-yellow-800'}`}>
+                      Coinbase Connection: {connectionStatus.coinbaseConnected ? 'Connected' : 'Connecting...'}
                     </p>
                   </div>
                 </div>
@@ -314,7 +324,7 @@ export default function Home() {
               <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-md">
                 <h3 className="text-sm font-medium text-blue-800">Connection Details</h3>
                 <div className="mt-2 text-sm text-blue-700">
-                  <p>WebSocket Endpoint: wss://ws-feed.exchange.coinbase.com</p>
+                  <p>Relay Server: http://localhost:4000</p>
                   <p className="mt-1">Connected Products: {subscribed.size} of {PRODUCTS.length}</p>
                 </div>
               </div>
